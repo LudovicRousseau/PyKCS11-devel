@@ -1,0 +1,151 @@
+name: Build
+
+# Controls when the action will run. Triggers the workflow on push or
+# pull request events but only for the master branch
+on: [push, pull_request]
+
+# A workflow run is made up of one or more jobs that can run
+# sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    name: "${{ matrix.name }} / ${{ matrix.cpython }}"
+    runs-on: "${{ matrix.runner }}"
+    defaults:
+      run:
+        shell: "bash"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        name:
+          - "Linux"
+          - "macOS"
+          - "Windows (x64)"
+          - "Windows (x86)"
+          - "Windows (arm64)"
+
+        cpython:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+
+        include:
+          # Augment the matrix with additional values.
+          # The values match on "name".
+          - name: "Linux"
+            runner: "ubuntu-latest"
+            architecture: "x64"
+
+          - name: "macOS"
+            runner: "macos-latest"
+            architecture: "arm64"
+
+          - name: "Windows (x64)"
+            runner: "windows-latest"
+            architecture: "x64"
+
+          - name: "Windows (x86)"
+            runner: "windows-latest"
+            architecture: "x86"
+
+          - name: "Windows (arm64)"
+            runner: "windows-11-arm"
+            architecture: "arm64"
+
+        exclude:
+          - name: "Windows (arm64)"
+            cpython: "3.10"
+
+    # Steps represent a sequence of tasks that will be executed as part of
+    # the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job
+      # can access it
+      - uses: actions/checkout@v5
+
+      - name: "Set up Python ${{ matrix.cpython }}"
+        uses: actions/setup-python@v6
+        with:
+          python-version: "${{ matrix.cpython }}"
+          architecture: "${{ matrix.architecture }}"
+          allow-prereleases: true
+
+      - name: "Install build prerequisites (Linux)"
+        if: matrix.name == 'Linux'
+        run: |
+          sudo apt install python3-all-dev python3-setuptools softhsm2 swig tox
+
+          sudo chmod -R a+rx /etc/softhsm
+          sudo chmod a+r /etc/softhsm/softhsm2.conf
+          sudo chown -R "$(whoami)" /var/lib/softhsm
+          softhsm2-util --init-token --slot 0 --label "A token" --pin 1234 --so-pin 123456
+
+          ./get_PYKCS11LIB.py > tox.env
+
+      - name: "clone SoftHSMv2"
+        if: matrix.name == 'macOS'
+        uses: actions/checkout@v5
+        with:
+          repository: softhsm/SoftHSMv2
+          path: resources/softhsm
+
+      - name: "Install build prerequisites (macOS)"
+        if: matrix.name == 'macOS'
+        run: |
+          brew install swig autoconf automake libtool
+
+          cd resources/softhsm
+          ./autogen.sh
+          ./configure --prefix=/tmp/softhsm --with-openssl=/opt/homebrew/opt/openssl
+          make install
+
+          /tmp/softhsm/bin/softhsm2-util --init-token --slot 0 --label "A token" --pin 1234 --so-pin 123456
+
+          echo "PYKCS11LIB=/tmp/softhsm/lib/softhsm/libsofthsm2.so" > tox.env
+
+      - name: "Install build prerequisites (Windows)"
+        if: startsWith(matrix.name, 'Windows')
+        shell: cmd
+        run: |
+          choco upgrade swig --allow-empty-checksums --yes --limit-output
+          swig -version
+
+          curl -Lo softhsm.zip https://github.com/disig/SoftHSM2-for-Windows/releases/download/v2.4.0/SoftHSM2-2.4.0-portable.zip
+          7z -bb3 -oc:\\ x softhsm.zip
+          set SOFTHSM2_CONF=C:\SoftHSM2\etc\softhsm2.conf
+          set PATH=%PATH%;C:\SoftHSM2\lib\
+          c:\\SoftHSM2\\bin\\softhsm2-util --init-token --slot 0 --label "A token" --pin 1234 --so-pin 123456
+
+          echo "PYKCS11LIB=/tmp/softhsm/lib/softhsm/libsofthsm2.so" > tox.env
+
+      - name: "Determine virtual environment bin path"
+        shell: "bash"
+        run: |
+          echo 'venv-path=temp/${{ runner.os == 'Windows' && 'Scripts' || 'bin' }}' >> "$GITHUB_ENV"
+
+      - name: "Create a virtual environment"
+        run: |
+          python -m venv temp
+          ${{ env.venv-path }}/python -m pip install --upgrade pip setuptools wheel
+          ${{ env.venv-path }}/pip install tox
+
+      - name: "Test"
+        run: |
+          ${{ env.venv-path }}/tox -e py${{ matrix.cpython }},coverage_report-ci
+
+      - name: "Coveralls"
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Build"
+        run: |
+          ${{ env.venv-path }}/tox -e build
+
+      - name: "Upload wheel"
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}-${{ matrix.cpython }}-${{ matrix.architecture }}
+          path: dist/*.whl
