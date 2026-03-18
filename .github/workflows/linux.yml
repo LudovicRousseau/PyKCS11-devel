@@ -25,6 +25,13 @@ jobs:
         shell: bash
         run: sudo apt install python3-all-dev python3-setuptools softhsm2 swig tox
 
+      # replace /dev/random by /dev/urandom so SoftHSM does not block on
+      # key generations
+      - name: hack /dev/random
+        run: |
+          sudo rm /dev/random
+          sudo mknod /dev/random c 1 9
+
       - name: Build
         run: |
           python3 -m venv temp
