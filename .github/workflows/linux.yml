@@ -29,8 +29,10 @@ jobs:
       # key generations
       - name: hack /dev/random
         run: |
+          ls -l /dev/random /dev/urandom
           sudo rm /dev/random
           sudo mknod /dev/random c 1 9
+          ls -l /dev/random /dev/urandom
 
       - name: Build
         run: |
