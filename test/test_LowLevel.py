@@ -27,7 +27,7 @@ class TestUtil(unittest.TestCase):
             lib = "/usr/lib/libSystem.B.dylib"
         else:
             # Windows
-            lib = "WinSCard.dll"
+            lib = "C:\\Windows\\System32\\ntdll.dll"
         self.assertEqual(a.Load(lib), -4)
 
         info = PyKCS11.LowLevel.CK_INFO()
